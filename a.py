@@ -25,7 +25,7 @@ from sklearn.utils import class_weight
 print(keras.__version__)
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="6"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 import os
 os.chdir('/home/jenyrajan/Major_Project_Seg_Caps_2020/Positive_Random')
@@ -429,6 +429,354 @@ def update_routing(votes, biases, logit_shape, num_dims, input_dim, output_dim,
     return K.cast(activations.read(num_routing - 1), dtype='float32')
 
 
+#### adding utility random funcitons
+# eps = 1e-10
+# def vector_norm(inputs, axis=-1, ord="euclidean", name=None):
+#     name = "vector_norm" if name is None else name
+#     with tf.name_scope(name):
+#         norm = tf.norm(inputs, ord=ord, axis=axis, keepdims=True)
+#         return inputs / (norm + eps), norm
+
+# def accumulate(inputs, axis=-1, shrink='exp', stable=False, norm_pose=True, name=None):
+#     name = "accumulate" if name is None else name
+#     with tf.name_scope(name):
+#         norm = tf.reduce_sum(inputs, axis=axis, keepdims=True)
+#         if stable:
+#             norm = norm - tf.reduce_max(norm, -2, keepdims=True)
+#         if shrink == 'exp':
+#             # norm = tf.math.log(norm) - 1
+#             # norm = tf.exp(norm) / (1+tf.exp(norm))
+#             norm = 1 - 1/tf.exp(norm)
+#         elif shrink == 'softmax':
+#             norm = tf.nn.softmax(norm, -2)
+#         if norm_pose:
+#             inputs, _ = vector_norm(inputs, axis=axis)
+#         return inputs, norm
+
+# def squash_new(inputs, axis=-1, ord="euclidean", name=None):
+#     name = "squashing" if name is None else name
+#     with tf.name_scope(name):
+#         norm = tf.norm(inputs, ord=ord, axis=axis, keepdims=True)
+#         norm_squared = tf.square(norm)
+#         scalar_factor = norm_squared / (1 + norm_squared)
+#         return scalar_factor * (inputs / (norm + eps)), scalar_factor
+import sys
+######
+def get_factorization_machines(inputs, biases, axis=-2, regularize=True):
+    # [bs, caps_in, caps_out, atom]
+    if regularize:
+        cap_in = inputs.get_shape()[1]
+        print('printshape_of_input')
+        print(inputs.get_shape())
+        print(type(cap_in))
+        # temp = np.sqrt(cap_in)
+        temp = tf.math.sqrt(K.cast(cap_in, dtype='float32'))
+        print("hello",temp)
+        inputs /= temp
+    print("popo inputs shape")
+    print(inputs.get_shape())
+    print('printing biases')
+    tf.print(biases, output_stream=sys.stdout)
+    
+    # preactivate = tf.reduce_sum(preact_trans, axis=1) + biases
+    x1 = tf.reduce_sum(inputs, axis, keepdims=True) + biases # [bs, 1, caps_out, atom]
+    # x1 = tf.reduce_sum(inputs, axis, keepdims=True) # [bs, 1, caps_out, atom]
+
+    print("popo x1 shape")
+    print(x1.get_shape())
+
+    x1 = tf.square(x1)
+
+    print("popo x1 shape after tf.square")
+    print(x1.get_shape())
+ 
+    x2_square = tf.square(inputs)
+
+    print("popo x2_square shape")
+    print(x2_square.get_shape())
+ 
+    x2 = tf.reduce_sum(x2_square, axis, keepdims=True)  # [bs, 1, caps_out, atom]
+    
+    print("popo x2 shape")
+    print(x2.get_shape())
+ 
+    outputs = x1 - x2
+    print("popo outputs shape")
+    print(outputs.get_shape())
+    # print(outputs.get_shape())
+    # outputs = K.expand_dims(outputs, -1)
+    # print("popo outputs shape after expand_dims")
+    # print(outputs.get_shape())
+  
+    outputs = tf.squeeze(outputs, axis)
+    weight = None
+    return outputs, weight
+    # return outputs
+
+def update_routing_new(votes, biases, logit_shape, num_dims, input_dim, output_dim,
+                    num_routing):
+    print('paramsprint')
+    print(votes)
+    print(biases)
+    print(logit_shape)
+    print(num_dims)
+    print(input_dim)
+    print(output_dim)
+    print(num_routing)
+    print('paramsprint')
+
+    if num_dims == 6:
+        votes_t_shape = [5, 0, 1, 2, 3, 4]
+        r_t_shape = [1, 2, 3, 4, 5, 0]
+    elif num_dims == 4:
+        votes_t_shape = [3, 0, 1, 2]
+        r_t_shape = [1, 2, 3, 0]
+    else:
+        raise NotImplementedError('Not implemented')
+
+    votes_trans = tf.transpose(votes, votes_t_shape)
+    _, _, _, height, width, caps = votes_trans.get_shape()
+
+    print("popo votes trans shape before pass to fm")
+    print(votes_trans.get_shape())
+
+    preact_trans = tf.transpose(votes_trans, r_t_shape)
+    print("popo preact trans shape before pass to fm")
+    print(preact_trans.get_shape())
+
+    print("popo votes shape before pass to fm")
+    print(votes.get_shape())
+    # print("popo")
+    # print(type(votes_trans))
+    outputs, importance = get_factorization_machines(preact_trans,biases, axis=1, regularize=True)
+    # outputs = get_factorization_machines(preact_trans, axis = 1, regularize=False)
+    
+    # print("popo")
+    # # print(type(votes_trans))
+    # print(outputs.get_shape())
+    # outputs, norm = accumulate(outputs, shrink=None, stable=False, norm_pose=True)
+    # outputs, _ = vector_norm(outputs)
+    # outputs, norm = squash_new(outputs)
+
+    # norm = tf.squeeze(norm, -1)
+     
+    return K.cast(outputs, dtype='float32')
+#####
+
+######
+class ConvCapsuleLayerRoutingChanged(layers.Layer):
+    def __init__(self, kernel_size, num_capsule, num_atoms, strides=1, padding='same', routings=3,
+                 kernel_initializer='he_normal', **kwargs):
+        super(ConvCapsuleLayerRoutingChanged, self).__init__(**kwargs)
+        self.kernel_size = kernel_size
+        self.num_capsule = num_capsule
+        self.num_atoms = num_atoms
+        self.strides = strides
+        self.padding = padding
+        self.routings = routings
+        self.kernel_initializer = initializers.get(kernel_initializer)
+
+    def build(self, input_shape):
+        assert len(input_shape) == 5, "The input Tensor should have shape=[None, input_height, input_width," \
+                                      " input_num_capsule, input_num_atoms]"
+        self.input_height = input_shape[1]
+        self.input_width = input_shape[2]
+        self.input_num_capsule = input_shape[3]
+        self.input_num_atoms = input_shape[4]
+
+        # Transform matrix
+        self.W = self.add_weight(shape=[self.kernel_size, self.kernel_size,
+                                 self.input_num_atoms, self.num_capsule * self.num_atoms],
+                                 initializer=self.kernel_initializer,
+                                 name='W')
+
+        self.b = self.add_weight(shape=[1, 1, self.num_capsule, self.num_atoms],
+                                 initializer=initializers.constant(0.1),
+                                 name='b')
+
+        self.built = True
+
+    def call(self, input_tensor, training=None):
+
+        input_transposed = tf.transpose(input_tensor, [3, 0, 1, 2, 4])
+        input_shape = K.shape(input_transposed)
+        input_tensor_reshaped = K.reshape(input_transposed, [
+            input_shape[0] * input_shape[1], self.input_height, self.input_width, self.input_num_atoms])
+        input_tensor_reshaped.set_shape((None, self.input_height, self.input_width, self.input_num_atoms))
+
+        conv = K.conv2d(input_tensor_reshaped, self.W, (self.strides, self.strides),
+                        padding=self.padding, data_format='channels_last')
+
+        votes_shape = K.shape(conv)
+        _, conv_height, conv_width, _ = conv.get_shape()
+
+        votes = K.reshape(conv, [input_shape[1], input_shape[0], votes_shape[1], votes_shape[2],
+                                 self.num_capsule, self.num_atoms])
+        votes.set_shape((None, self.input_num_capsule, conv_height.value, conv_width.value,
+                         self.num_capsule, self.num_atoms))
+
+        logit_shape = K.stack([
+            input_shape[1], input_shape[0], votes_shape[1], votes_shape[2], self.num_capsule])
+        biases_replicated = K.tile(self.b, [conv_height.value, conv_width.value, 1, 1])
+
+        activations = update_routing_new(
+            votes=votes,
+            biases=biases_replicated,
+            logit_shape=logit_shape,
+            num_dims=6,
+            input_dim=self.input_num_capsule,
+            output_dim=self.num_capsule,
+            num_routing=self.routings)
+
+        return activations
+
+    def compute_output_shape(self, input_shape):
+        space = input_shape[1:-2]
+        new_space = []
+        for i in range(len(space)):
+            new_dim = conv_output_length(
+                space[i],
+                self.kernel_size,
+                padding=self.padding,
+                stride=self.strides,
+                dilation=1)
+            new_space.append(new_dim)
+
+        return (input_shape[0],) + tuple(new_space) + (self.num_capsule, self.num_atoms)
+
+    def get_config(self):
+        config = {
+            'kernel_size': self.kernel_size,
+            'num_capsule': self.num_capsule,
+            'num_atoms': self.num_atoms,
+            'strides': self.strides,
+            'padding': self.padding,
+            'routings': self.routings,
+            'kernel_initializer': initializers.serialize(self.kernel_initializer)
+        }
+        base_config = super(ConvCapsuleLayerRoutingChanged, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+######
+class DeconvCapsuleLayerRoutingChanged(layers.Layer):
+    def __init__(self, kernel_size, num_capsule, num_atoms, scaling=2, upsamp_type='deconv', padding='same', routings=3,
+                 kernel_initializer='he_normal', **kwargs):
+        super(DeconvCapsuleLayerRoutingChanged, self).__init__(**kwargs)
+        self.kernel_size = kernel_size
+        self.num_capsule = num_capsule
+        self.num_atoms = num_atoms
+        self.scaling = scaling
+        self.upsamp_type = upsamp_type
+        self.padding = padding
+        self.routings = routings
+        self.kernel_initializer = initializers.get(kernel_initializer)
+
+    def build(self, input_shape):
+        assert len(input_shape) == 5, "The input Tensor should have shape=[None, input_height, input_width," \
+                                      " input_num_capsule, input_num_atoms]"
+        self.input_height = input_shape[1]
+        self.input_width = input_shape[2]
+        self.input_num_capsule = input_shape[3]
+        self.input_num_atoms = input_shape[4]
+
+        # Transform matrix
+        if self.upsamp_type == 'subpix':
+            self.W = self.add_weight(shape=[self.kernel_size, self.kernel_size,
+                                            self.input_num_atoms,
+                                            self.num_capsule * self.num_atoms * self.scaling * self.scaling],
+                                     initializer=self.kernel_initializer,
+                                     name='W')
+        elif self.upsamp_type == 'resize':
+            self.W = self.add_weight(shape=[self.kernel_size, self.kernel_size,
+                                     self.input_num_atoms, self.num_capsule * self.num_atoms],
+                                     initializer=self.kernel_initializer, name='W')
+        elif self.upsamp_type == 'deconv':
+            self.W = self.add_weight(shape=[self.kernel_size, self.kernel_size,
+                                            self.num_capsule * self.num_atoms, self.input_num_atoms],
+                                     initializer=self.kernel_initializer, name='W')
+        else:
+            raise NotImplementedError('Upsampling must be one of: "deconv", "resize", or "subpix"')
+
+        self.b = self.add_weight(shape=[1, 1, self.num_capsule, self.num_atoms],
+                                 initializer=initializers.constant(0.1),
+                                 name='b')
+
+        self.built = True
+
+    def call(self, input_tensor, training=None):
+        input_transposed = tf.transpose(input_tensor, [3, 0, 1, 2, 4])
+        input_shape = K.shape(input_transposed)
+        input_tensor_reshaped = K.reshape(input_transposed, [
+            input_shape[1] * input_shape[0], self.input_height, self.input_width, self.input_num_atoms])
+        input_tensor_reshaped.set_shape((None, self.input_height, self.input_width, self.input_num_atoms))
+
+
+        if self.upsamp_type == 'resize':
+            upsamp = K.resize_images(input_tensor_reshaped, self.scaling, self.scaling, 'channels_last')
+            outputs = K.conv2d(upsamp, kernel=self.W, strides=(1, 1), padding=self.padding, data_format='channels_last')
+        elif self.upsamp_type == 'subpix':
+            conv = K.conv2d(input_tensor_reshaped, kernel=self.W, strides=(1, 1), padding='same',
+                            data_format='channels_last')
+            outputs = tf.depth_to_space(conv, self.scaling)
+        else:
+            batch_size = input_shape[1] * input_shape[0]
+
+            # Infer the dynamic output shape:
+            out_height = deconv_length(self.input_height, self.scaling, self.kernel_size, self.padding, 2)
+            out_width = deconv_length(self.input_width, self.scaling, self.kernel_size, self.padding, 2)
+            output_shape = (batch_size, out_height, out_width, self.num_capsule * self.num_atoms)
+
+            outputs = K.conv2d_transpose(input_tensor_reshaped, self.W, output_shape, (self.scaling, self.scaling),
+                                     padding=self.padding, data_format='channels_last')
+
+        votes_shape = K.shape(outputs)
+        _, conv_height, conv_width, _ = outputs.get_shape()
+
+        votes = K.reshape(outputs, [input_shape[1], input_shape[0], votes_shape[1], votes_shape[2],
+                                 self.num_capsule, self.num_atoms])
+        votes.set_shape((None, self.input_num_capsule, conv_height.value, conv_width.value,
+                         self.num_capsule, self.num_atoms))
+
+        logit_shape = K.stack([
+            input_shape[1], input_shape[0], votes_shape[1], votes_shape[2], self.num_capsule])
+        biases_replicated = K.tile(self.b, [votes_shape[1], votes_shape[2], 1, 1])
+
+        activations = update_routing_new(
+            votes=votes,
+            biases=biases_replicated,
+            logit_shape=logit_shape,
+            num_dims=6,
+            input_dim=self.input_num_capsule,
+            output_dim=self.num_capsule,
+            num_routing=self.routings)
+
+        return activations
+
+    def compute_output_shape(self, input_shape):
+        output_shape = list(input_shape)
+
+        output_shape[1] = deconv_length(output_shape[1], self.scaling, self.kernel_size, self.padding,2)
+        output_shape[2] = deconv_length(output_shape[2], self.scaling, self.kernel_size, self.padding,2)
+        output_shape[3] = self.num_capsule
+        output_shape[4] = self.num_atoms
+
+        return tuple(output_shape)
+
+    def get_config(self):
+        config = {
+            'kernel_size': self.kernel_size,
+            'num_capsule': self.num_capsule,
+            'num_atoms': self.num_atoms,
+            'scaling': self.scaling,
+            'padding': self.padding,
+            'upsamp_type': self.upsamp_type,
+            'routings': self.routings,
+            'kernel_initializer': initializers.serialize(self.kernel_initializer)
+        }
+        base_config = super(DeconvCapsuleLayerRoutingChanged, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+#######
 def _squash(input_tensor):
     norm = tf.norm(input_tensor, axis=-1, keepdims=True)
     norm_squared = norm * norm
@@ -498,6 +846,129 @@ def CapsNetR3(input_shape, n_class=2, enable_decoder=True):
 
     # Layer 1: Just a conventional Conv2D layer
     conv1 = layers.Conv2D(filters=16, kernel_size=5, strides=1, padding='same', activation='relu', name='conv1')(x)
+    
+    # Reshape layer to be 1 capsule x [filters] atoms
+    _, H, W, C = conv1.get_shape() # _, 512, 512, 16
+    conv1_reshaped = layers.Reshape((H.value, W.value, 1, C.value))(conv1)
+  
+    # Layer 1: Primary Capsule: Conv cap with routing 1
+    primary_caps = ConvCapsuleLayer(kernel_size=5, num_capsule=2, num_atoms=16, strides=2, padding='same',
+                                    routings=1, name='primarycaps')(conv1_reshaped)
+    print('ioioconvprimary')
+    print(primary_caps.get_shape())
+  
+    # Layer 2: Convolutional Capsule
+    conv_cap_2_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=4, num_atoms=16, strides=1, padding='same',
+                                    routings=3, name='conv_cap_2_1')(primary_caps)
+    print('ioioconv21')
+    print(conv_cap_2_1.get_shape())
+  
+    # Layer 2: Convolutional Capsule
+    conv_cap_2_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=4, num_atoms=32, strides=2, padding='same',
+                                    routings=3, name='conv_cap_2_2')(conv_cap_2_1)
+    print('ioioconv22')
+    print(conv_cap_2_2.get_shape())
+  
+    # Layer 3: Convolutional Capsule
+    conv_cap_3_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=8, num_atoms=32, strides=1, padding='same',
+                                    routings=3, name='conv_cap_3_1')(conv_cap_2_2)
+    print('ioioconv31')
+    print(conv_cap_3_1.get_shape())
+  
+    # Layer 3: Convolutional Capsule
+    conv_cap_3_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=8, num_atoms=64, strides=2, padding='same',
+                                    routings=3, name='conv_cap_3_2')(conv_cap_3_1)
+    print('ioioconv32')
+    print(conv_cap_3_2.get_shape())
+  
+    # Layer 4: Convolutional Capsule
+    conv_cap_4_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=8, num_atoms=32, strides=1, padding='same',
+                                    routings=3, name='conv_cap_4_1')(conv_cap_3_2)
+    print('ioioconv41')
+    print(conv_cap_4_1.get_shape())
+  
+    # Layer 1 Up: Deconvolutional Capsule
+    deconv_cap_1_1 = DeconvCapsuleLayer(kernel_size=4, num_capsule=8, num_atoms=32, upsamp_type='deconv',
+                                        scaling=2, padding='same', routings=3,
+                                        name='deconv_cap_1_1')(conv_cap_4_1)
+
+    print('ioiodeconv11')
+    print(deconv_cap_1_1.get_shape())
+  
+    # Skip connection
+    up_1 = layers.Concatenate(axis=-2, name='up_1')([deconv_cap_1_1, conv_cap_3_1])
+
+    # Layer 1 Up: Deconvolutional Capsule
+    deconv_cap_1_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=4, num_atoms=32, strides=1,
+                                      padding='same', routings=3, name='deconv_cap_1_2')(up_1)
+
+    # Layer 2 Up: Deconvolutional Capsule
+    deconv_cap_2_1 = DeconvCapsuleLayer(kernel_size=4, num_capsule=4, num_atoms=16, upsamp_type='deconv',
+                                        scaling=2, padding='same', routings=3,
+                                        name='deconv_cap_2_1')(deconv_cap_1_2)
+
+    # Skip connection
+    up_2 = layers.Concatenate(axis=-2, name='up_2')([deconv_cap_2_1, conv_cap_2_1])
+
+    # Layer 2 Up: Deconvolutional Capsule
+    deconv_cap_2_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=4, num_atoms=16, strides=1,
+                                      padding='same', routings=3, name='deconv_cap_2_2')(up_2)
+
+    # Layer 3 Up: Deconvolutional Capsule
+    deconv_cap_3_1 = DeconvCapsuleLayer(kernel_size=4, num_capsule=2, num_atoms=16, upsamp_type='deconv',
+                                        scaling=2, padding='same', routings=3,
+                                        name='deconv_cap_3_1')(deconv_cap_2_2)
+
+    # Skip connection
+    up_3 = layers.Concatenate(axis=-2, name='up_3')([deconv_cap_3_1, conv1_reshaped])
+
+    # Layer 4: Convolutional Capsule: 1x1
+    seg_caps = ConvCapsuleLayer(kernel_size=1, num_capsule=1, num_atoms=16, strides=1, padding='same',
+                                routings=3, name='seg_caps')(up_3)
+
+    # Layer 4: This is an auxiliary layer to replace each capsule with its length. Just to match the true label's shape.
+    out_seg = Length(num_classes=n_class, seg=True, name='out_seg')(seg_caps)
+
+    # Decoder network.
+    _, H, W, C, A = seg_caps.get_shape() #(?, 512, 512, 1, 16)
+    y = layers.Input(shape=input_shape[:-1]+(1,)) #y: keras_shape(512, 512, 1)
+    masked_by_y = Mask()([seg_caps, y])  # The true label is used to mask the output of capsule layer. For training (None, 512, 512, 1, 16)
+    masked = Mask()(seg_caps)  # Mask using the capsule with maximal length. For prediction ()
+
+    def shared_decoder(mask_layer):
+        recon_remove_dim = layers.Reshape((H.value, W.value, A.value))(mask_layer) #mask_layer=(?, 512, 512, 1, 16)
+
+        recon_1 = layers.Conv2D(filters=64, kernel_size=1, padding='same', kernel_initializer='he_normal',
+                                activation='relu', name='recon_1')(recon_remove_dim)
+
+        recon_2 = layers.Conv2D(filters=128, kernel_size=1, padding='same', kernel_initializer='he_normal',
+                                activation='relu', name='recon_2')(recon_1)
+
+        out_recon = layers.Conv2D(filters=1, kernel_size=1, padding='same', kernel_initializer='he_normal',
+                                  activation='sigmoid', name='out_recon')(recon_2)
+
+        return out_recon
+
+    # Models for training and evaluation (prediction)
+    train_model = models.Model(inputs=[x, y], outputs=[out_seg, shared_decoder(masked_by_y)])
+    if enable_decoder == True:
+        eval_model = models.Model(inputs=x, outputs=[out_seg, shared_decoder(masked)])
+    else:
+        eval_model = models.Model(inputs=x, outputs=[out_seg])
+    # manipulate model
+    noise = layers.Input(shape=((H.value, W.value, C.value, A.value)))
+    noised_seg_caps = layers.Add()([seg_caps, noise])
+    masked_noised_y = Mask()([noised_seg_caps, y])
+    manipulate_model = models.Model(inputs=[x, y, noise], outputs=shared_decoder(masked_noised_y))
+
+    return train_model, eval_model, manipulate_model
+  
+
+def CapsNetR3Depth5(input_shape, n_class=2, enable_decoder=True):
+    x = layers.Input(shape=input_shape) # x=keras_shape(None, 512, 512, 3)
+
+    # Layer 1: Just a conventional Conv2D layer
+    conv1 = layers.Conv2D(filters=16, kernel_size=5, strides=1, padding='same', activation='relu', name='conv1')(x)
 
     # Reshape layer to be 1 capsule x [filters] atoms
     _, H, W, C = conv1.get_shape() # _, 512, 512, 16
@@ -511,7 +982,7 @@ def CapsNetR3(input_shape, n_class=2, enable_decoder=True):
     conv_cap_2_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=4, num_atoms=16, strides=1, padding='same',
                                     routings=3, name='conv_cap_2_1')(primary_caps)
 
-    # Layer 2: Convolutional Capsule
+        # Layer 2: Convolutional Capsule
     conv_cap_2_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=4, num_atoms=32, strides=2, padding='same',
                                     routings=3, name='conv_cap_2_2')(conv_cap_2_1)
 
@@ -524,13 +995,33 @@ def CapsNetR3(input_shape, n_class=2, enable_decoder=True):
                                     routings=3, name='conv_cap_3_2')(conv_cap_3_1)
 
     # Layer 4: Convolutional Capsule
-    conv_cap_4_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=8, num_atoms=32, strides=1, padding='same',
+    conv_cap_4_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=16, num_atoms=64, strides=1, padding='same',
                                     routings=3, name='conv_cap_4_1')(conv_cap_3_2)
+
+    # Layer 4: Convolutional Capsule
+    conv_cap_4_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=16, num_atoms=128, strides=2, padding='same',
+                                    routings=3, name='conv_cap_4_2')(conv_cap_4_1)
+
+    # Layer 5: Convolutional Capsule
+    conv_cap_5_1 = ConvCapsuleLayer(kernel_size=5, num_capsule=16, num_atoms=64, strides=1, padding='same',
+                                    routings=3, name='conv_cap_5_1')(conv_cap_4_2)
+
+   # Layer 0 Up: Deconvolutional Capsule
+    deconv_cap_0_1 = DeconvCapsuleLayer(kernel_size=4, num_capsule=16, num_atoms=64, upsamp_type='deconv',
+                                        scaling=2, padding='same', routings=3,
+                                        name='deconv_cap_0_1')(conv_cap_5_1)
+
+    # Skip connection
+    up_0 = layers.Concatenate(axis=-2, name='up_0')([deconv_cap_0_1, conv_cap_4_1])
+
+    # Layer 0 Up: Deconvolutional Capsule
+    deconv_cap_0_2 = ConvCapsuleLayer(kernel_size=5, num_capsule=8, num_atoms=64, strides=1,
+                                      padding='same', routings=3, name='deconv_cap_0_2')(up_0)
 
     # Layer 1 Up: Deconvolutional Capsule
     deconv_cap_1_1 = DeconvCapsuleLayer(kernel_size=4, num_capsule=8, num_atoms=32, upsamp_type='deconv',
                                         scaling=2, padding='same', routings=3,
-                                        name='deconv_cap_1_1')(conv_cap_4_1)
+                                        name='deconv_cap_1_1')(deconv_cap_0_2)
 
     # Skip connection
     up_1 = layers.Concatenate(axis=-2, name='up_1')([deconv_cap_1_1, conv_cap_3_1])
@@ -812,39 +1303,37 @@ margin_l = margin_loss(margin=0.4, downweight=0.5, pos_weight=1.0)
 #loss , loss_weights={'out_seg': 'binary_crossentropy', 'out_recon': 'mse'}, {'out_seg': 1., 'out_recon': 0.392}
 #model.compile(optimizer = optimiser, loss = loss, loss_weights=loss_weights, metrics = ['accuracy',dice_coef])
 lr=0.001
-#optimiser= Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon = 0.1, decay = 1e-6) 
+optimiser= Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon = 0.1, decay = 1e-6) 
 
 ##############################################      Optimiser     #################################################
-optimiser= Adam() 
-#optimiser=Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, amsgrad=True)
+# optimiser= Adam(lr=lr) 
+# optimiser=Adam(lr=0.001, beta_1=0.9, beta_2=0.999, amsgrad=True)
 #optimiser=Adam(amsgrad=True)
 model.compile(optimizer = optimiser, loss = ['binary_crossentropy','mse'], loss_weights=[1.,0.392], metrics = ['accuracy',dice_coef])
 #class_weights = class_weight.compute_class_weight('balanced',np.unique(np.squeeze(ytrain)), ytrain)
-#class_weights = {0: 1.,1: 50.}    
+#class_weights = {0: 1.,1: 50.}   
 tmodel[1].summary()
 
 import os 
 
-# os.chdir('/home/jenyrajan/Major_Project_Seg_Caps_2020/Positive_Random/Results-1100epochs-segcaps')
-# cwd = os.getcwd() 
-# print("Current working directory is:", cwd) 
+os.chdir('/home/jenyrajan/Major_Project_Seg_Caps_2020/Positive_Random/Results-routing/debug/')
+cwd = os.getcwd() 
+print("Current working directory is:", cwd) 
 
-# #cv = CSVLogger('Results-1100epochs-segcaps.csv',append=True)
-# lr_decay = LearningRateScheduler(schedule=lambda epoch: lr * (0.9 ** epoch))
-# tensorboard_callback = TensorBoard( histogram_freq=1)
-# lr_reducer = ReduceLROnPlateau(monitor='val_out_seg_dice_coef', factor=0.05, cooldown=0, patience=50,verbose=1, mode='max')
+cv = CSVLogger('Results-1100epochs-segcaps.csv',append=True)
+lr_decay = LearningRateScheduler(schedule=lambda epoch: lr * (0.9 ** epoch))
+tensorboard_callback = TensorBoard( histogram_freq=1)
+lr_reducer = ReduceLROnPlateau(monitor='val_out_seg_dice_coef', factor=0.05, cooldown=0, patience=50,verbose=1, mode='max')
 
-# out_seg_loss = ModelCheckpoint('out_seg_loss.h5', verbose=1,monitor='out_seg_loss', mode='min', save_best_only=True)
-# t_loss = ModelCheckpoint('loss.h5', verbose=1,monitor='loss', mode='min', save_best_only=True)
-# val_out_seg_loss = ModelCheckpoint('val_out_seg_loss.h5', verbose=1,monitor='val_out_seg_loss', mode='min', save_best_only=True)
-# val_out_seg_dice_coef = ModelCheckpoint('val_out_seg_dice_coef.h5', verbose=1,monitor='val_out_seg_dice_coef', mode='max', save_best_only=True)
+out_seg_loss = ModelCheckpoint('weights/out_seg_loss-{epoch:02d}.h5', verbose=1,monitor='out_seg_loss', mode='min', save_best_only=True)
+t_loss = ModelCheckpoint('weights/loss-{epoch:02d}.h5', verbose=1,monitor='loss', mode='min', save_best_only=True)
+val_out_seg_loss = ModelCheckpoint('weights/val_out_seg_loss-{epoch:02d}.h5', verbose=1,monitor='val_out_seg_loss', mode='min', save_best_only=True)
+val_out_seg_dice_coef = ModelCheckpoint('weights/val_out_seg_dice_coef-{epoch:02d}.h5', verbose=1,monitor='val_out_seg_dice_coef', mode='max', save_best_only=True)
 
-#  model.fit([xtrain, ytrain], [ytrain, xtrain*ytrain],verbose = 0,batch_size=1,epochs=1100, 
-# #           validation_data=([xval, yval], [yval, xval*yval]),callbacks=[cv,out_seg_loss,t_loss,val_out_seg_loss,val_out_seg_dice_coef,tensorboard_callback])
+model.fit([xtrain, ytrain], [ytrain, xtrain*ytrain],verbose = 0,batch_size=1,epochs=1,
+ validation_data=([xval, yval], [yval, xval*yval]),callbacks=[cv,out_seg_loss,t_loss,val_out_seg_loss,val_out_seg_dice_coef,tensorboard_callback])
 
-
-
-
+"""
 ######################################################   Test & Val Metrics Calculation   #############################################################
 import matplotlib.pyplot as plt
 import matplotlib
@@ -895,7 +1384,7 @@ print("Recall   : ",re)
 print('--------------------------------------------')
 
 print('===============================================================================================')
-
+"""
 #############################################################################################################################################################
 """
 #model.load_weights('out_seg_loss.h5')
